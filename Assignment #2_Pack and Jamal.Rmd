@@ -1,0 +1,312 @@
+---
+title: "Quantitative Analysis | Assignment #1 & 2"
+author: "Livesey Pack and Mehvish Jamal"
+date: "10/26/2021"
+output: html_document
+theme: readable
+toc : true
+toc_depth : 3
+toc_float : true
+---
+# Research Question 
+How does a mix of incomes in a geography contribute to a community’s economic prosperity?
+
+# Prior Literature
+According to the Social Science Research Council's (2007) Mixed-Income Research Design Group, mixed-income communities facilitate the co-location of lower-income residents, who historically live in geographies of concentrated poverty in the United States, and higher-income neighbors. The proximity of these populations from diverse backgrounds enables greater social exchange that could contribute to greater opportunity for lower-income residents. They state that mixed-income strategies "[create] a stable, high-quality community that is home to residents of very diverse backgrounds." Levy, McDade and Dumlao (2010) support this conclusion in their assessment of the benefits of mixed-income housing. They summarize the primary benefits of mixed-income housing strategies as: poverty alleviation, desegregation and urban revitalization.
+
+# Population
+The sample population includes all households living in core-based statistical areas 
+(CBSAs) in Texas. The analysis will include the following variables:
+
+* Total households (U.S. Census Bureau, 2010) 
+* Gini Index of Income Inequality (IPUMS National Historical Geographic Information System)
+* Median home value (IPUMS National Historical Geographic Information System)
+* Home-ownership rates (U.S. Census Bureau, 2010)
+* Percent of population that is rent burdened (U.S. Census Bureau, 2010) 
+
+## Load Data
+```{r}
+#install.packages("survey")
+#install.packages("srvyr")
+#install.packages("tigris")
+#install.packages("gridExtra")
+#install.packages("dplyr")
+```
+
+We will be using the following libraries for this assignment:
+```{r}
+library(tidycensus)
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(sf)
+library(tigris)
+library(gridExtra)
+library(ipumsr)
+library(survey)
+library(srvyr)
+library(dplyr)
+
+# Change me
+path <- "C:/Users/mehvi/Documents/MUP/Fall 2021/Quant Analysis/Assingment 1"
+```
+
+First, we will load a series of variables from the 2010 Census. This data is courtesy of the U.S. Census Bureau. 
+```{r}
+CensusData_raw    <- read_csv("Social Explorer_Census Data_MSA Level2.csv")
+
+# First row contains additional variable names / this command deletes the first row
+CensusData      <- CensusData_raw[-1,]
+
+# Keep variables 
+varkeep       <- c("tot-occhu", "tot_ownocu", "tot_rentocu", "rentburd1", "rentburd2", "rentburd3", "rentburd4", "rentburd5", "FIPS", "GEOID", "geo_CBSA")
+CensusData    <- subset(CensusData, select = varkeep)
+```
+
+We used our collated census data to calculate a new variable, the percent of rent-burdened populations across several income strata. First, we had to tell R to read these variables as numbers, rather than text.
+```{r}
+CensusData <- CensusData %>%
+  mutate(rentburd1 = as.numeric(as.factor(rentburd1)),
+         rentburd2 = as.numeric(as.factor(rentburd2)),
+         rentburd3 = as.numeric(as.factor(rentburd3)),
+         rentburd4 = as.numeric(as.factor(rentburd4)),
+         rentburd5 = as.numeric(as.factor(rentburd5)),
+         tot_ownocu = as.numeric(as.factor(tot_ownocu)),
+         `tot-occhu` = as.numeric(as.factor(`tot-occhu`)),
+         tot_rentocu = as.numeric(as.factor(tot_rentocu)))
+```
+
+We then calculated this new variable and added it to our existing census data table. 
+```{r}
+CensusData <- mutate(CensusData, tot_rentburd = `rentburd1` + `rentburd2` + `rentburd3` + `rentburd4` + `rentburd5`)
+```
+
+Then we calculated rates of homeownership. 
+```{r}
+CensusData <- mutate(CensusData, pct_own = `tot_ownocu` / `tot-occhu`)
+```
+
+Finally, we calculated the percentage of total households that are rent-burdened. 
+```{r}
+CensusData <- mutate(CensusData, pct_rentburd = `tot_rentburd` / `tot_rentocu`)
+```
+
+Our final set of variables, median home value and income inequality are IPUMS data, courtesy of the 2019 American Community Survey and the National Historical Geographic Information System. 
+```{r}
+IPUMS_housevalue <- read_csv("nghis0001_ds244_clean.csv")
+
+IPUMS_inequality <- read_csv("nhgis0001_clean.csv")
+```
+
+Before we joined our data into one table, we cleaned up the joining variable name, "geo_CBSA," to ensure we had a common variable across the data sets.  
+```{r}
+CensusData <- CensusData %>% mutate(geo_CBSA = as.character(geo_CBSA))
+
+IPUMS_housevalue <- IPUMS_housevalue %>% mutate(geo_CBSA = as.character(geo_CBSA))
+
+IPUMS_inequality <- IPUMS_inequality %>% mutate(geo_CBSA = as.character(geo_CBSA))
+
+```
+
+We renamed variables for simplicity
+```{r}
+#rename(tablename, newvariable = old variable)
+IPUMS_housevalue <- rename(IPUMS_housevalue, `med_houseval` = `MEDIAN HOUSE VALUE`)
+```
+```{r}
+IPUMS_inequality <- rename(IPUMS_inequality, `inc_inequal` = `INCOME INEQUALITY`)
+```
+```{r}
+IPUMS_housevalue <- rename(IPUMS_housevalue, `houseval_moe` = `Margin of Error`)
+IPUMS_inequality <- rename(IPUMS_inequality, `incineq_moe` = `Margin of Error`)
+```
+
+and kept only relevant variables
+```{r}
+# Keep variables 
+varkeep       <- c("geo_CBSA", "GISJOIN", "CBSA", "GEOID", "med_houseval", "houseval_moe")
+IPUMS_housevalue   <- subset(IPUMS_housevalue, select = varkeep)
+```
+```{r}
+varkeep       <- c("geo_CBSA", "GISJOIN", "CBSA_Name", "GEOID", "inc_inequal", "incineq_moe")
+IPUMS_inequality  <- subset(IPUMS_inequality, select = varkeep)
+```
+```{r}
+IPUMS_inequality <- rename(IPUMS_inequality, `CBSA` = `CBSA_Name`)
+```
+
+Once the data was prepped, we joined data into one table, and then filtered to the data for CBSAs in Texas. The final table, including 72 observations, is highlighted below. 
+```{r}
+data <- left_join(CensusData, IPUMS_housevalue, by = "geo_CBSA") %>%
+  left_join(IPUMS_inequality, by = "geo_CBSA")
+
+data1 <- filter(data, GEOID.y !=  'NA')
+
+kable(head(data1))
+```
+
+Drop repetitive columns
+```{r}
+data1 <- select(data1, -c(CBSA.y, GISJOIN.y, GEOID.y))
+```
+
+## Descriptive Statistics
+# Continuous Variables
+```{r}
+pown_t_test <- t.test(data$pct_own)
+prentburd_t_test <- t.test(data$pct_rentburd)
+houseval_t_test <- t.test(data$med_houseval)
+```
+
+```{r}
+pown_quartiles <- quantile(data$pct_own, na.rm = TRUE)
+prentburd_quartiles <- quantile(data$pct_rentburd, na.rm = TRUE)
+houseval_quartiles <- quantile(data$med_houseval, na.rm = TRUE)
+```
+
+```{r}
+pown_st_dev <- sd(data$pct_own, na.rm = TRUE)
+prentburd_st_dev <- sd(data$pct_rentburd, na.rm = TRUE)
+houseval_st_dev <- sd(data$med_houseval, na.rm = TRUE)
+```
+
+# Plot Histogram
+```{r}
+pown_hist <- ggplot(data) +
+  geom_histogram(aes(x = pct_own),
+                 bins = 30) +
+  scale_x_continuous(trans = "log")
+```
+
+```{r}
+prentburd_hist <- ggplot(data) +
+  geom_histogram(aes(x = pct_rentburd),
+                 bins = 30) +
+  scale_x_continuous(trans = "log")
+```
+
+NEED HELP TROUBLESHOOTING
+```{r}
+#houseval_hist <- ggplot(data) +
+  #geom_histogram(aes(x = med_houseval,
+                 #bins = 30)
+```
+
+#Displaying Results
+```{r}
+cont_summary <- tibble(
+  Variable = c("Homeownership Rate (percent)", 
+               "Rent Burdened Population (percent, 30% of income on rent or more)", 
+               "Median Home Value (dollars)"),
+  `Sample mean` = c(pown_t_test$estimate,
+                    prentburd_t_test$estimate,
+                    houseval_t_test$estimate),
+  `Population mean (95% confidence) - low` = 
+    c(pown_t_test$conf.int[1],
+      prentburd_t_test$conf.int[1],
+      houseval_t_test$conf.int[1]),
+  `Population mean (95% confidence) - high` =
+    c(pown_t_test$conf.int[2],
+      prentburd_t_test$conf.int[2],
+      houseval_t_test$conf.int[2]),
+  Median = c(pown_quartiles[3],
+             prentburd_quartiles[3],
+             houseval_quartiles[3]),
+  `Interquartile range` = c(pown_quartiles[4] - pown_quartiles[2],
+                            prentburd_quartiles[4] - prentburd_quartiles[2],
+                            (houseval_quartiles[4] - houseval_quartiles[2])),
+  `Standard deviation` = c(pown_st_dev,
+                          prentburd_st_dev,
+                          houseval_st_dev))
+
+kable(cont_summary, digits = 0)
+```
+
+# Histograms
+
+```{r, warning=FALSE, message=FALSE, gif.height=4, fig.width=7}
+pretty_pown_hist <- pown_hist +
+  theme_bw() +
+  scale_x_continuous(name = "Homeownership Rate\n(percent)",
+                     trans = "log",
+                     breaks = c(0, .5, 2.5, 5, 7.5),
+                     labels = c("0", ".5", "2.5", "5", "7.5")) +
+  scale_y_continuous(name = "Number of MSAs") +
+  theme(axis.text.x = element_text(angle = 90))
+
+pretty_prentburd_hist <- prentburd_hist +
+  theme_bw() + 
+  scale_x_continuous(name = "Rent Burdened Population\n(percent, 30% of income or\nmore on rent)",
+                     trans = "log",
+                     breaks = c(0, 5, 10, 15, 20, 25, 30),
+                     labels = c("0", "5", "10", "15", "20", "25", "30")) +
+  scale_y_continuous(name = "Number of MSAs") +
+  theme(axis.text.x = element_text(angle = 90))
+
+grid.arrange(pretty_pown_hist, pretty_prentburd_hist, #pretty_houseval_hist,
+             ncol = 3)
+```
+ONCE HOUSEVAL_HIST IS FIXED, ADD THIS TO ABOVE CHUNK
+```{r}
+#pretty_houseval_hist = houseval_hist +
+  #theme_bw() +
+  #scale_x_continuous(name = "Median Home Value\n(dollars)",
+                     #breaks = seq(0, 250000, by=50000),
+                     #labels = seq(0, 250000, by = 50000)) +
+  #scale_y_continuous(name = "Number of MSAs") +
+  #theme(axis.text.x = element_text(angle = 90)) 
+```
+
+##Categorical Variables
+We have two categorical variables: 
+1. Rent-burdened households by income 
+2. The Gini Index of Income Inequality
+
+The rent burden variable has already been broken into 5 categories by income, however we still need to break down the Gini Index into deciles between 0 and 1. 
+```{r continuous to categorical, Gini Index}
+data1$GiniCat1<-cut(data1$inc_inequal, c(0,0.1,0.2,0.3,0.4,0.5,0.6, 0.7,0.8,0.9,1))
+```
+
+# Calculations
+First, we're applying a sample t-test to get the 95-percent confidence interval for the proportion of the sample in each category. 
+NEED HELP TROUBLESHOOTING
+```{r}
+#pct_Gini_index1 <- t.test(data$type == "0, 0.1")
+#pct_Gini_index2 <- t.test(data$type == "0.1, 0.2")
+#pct_Gini_index3 <- t.test(data$type == "0.2, 0.3")
+#pct_Gini_index4 <- t.test(data$type == "0.3, 0.4")
+#pct_Gini_index5 <- t.test(data$type == "0.4, 0.5")
+
+#pct_rentburd1 <- t.test(data$type == "rentburd1")
+#pct_rentburd2 <- t.test(data$type == "rentburd2")
+#pct_rentburd3 <- t.test(data$type == "rentburd3")
+#pct_rentburd4 <- t.test(data$type == "rentburd4")
+#pct_rentburd5 <- t.test(data$type == "rentburd5")
+```
+
+
+## References
+
+"Confronting Concentrated Poverty with a Mixed-Income Strategy." Evidence Matters (Spring 2013). Office of Policy Development and Research at the United States Department of Housing and Urban Development. https://www.huduser.gov/portal/periodicals/em/spring13/highlight1.html#title.
+
+Freedman Ellis, Greg, and Derek Burk (2020). ipumsr: Read 'IPUMS' Extract Files.R package version 0.4.5. https://CRAN.R-project.org/package=ipumsr
+
+Levy, Diane K., Zach McDade, and Kassie Dumlao. "Effects from Living in Mixed-Income Communities for Low-Income Families: A Review of the Literature." The Urban Institute (2010), 14. https://www.urban.org/sites/default/files/publication/27116/412292-Effects-from-Living-in-Mixed-Income-Communities-for-Low-Income-Families.PDF. 
+
+Manson, Steven, Jonathan Schroeder, David Van Riper, Tracy Kugler, and Steven Ruggles. 
+        IPUMS National Historical Geographic Information System: Version 16.0 
+        [dataset]. Minneapolis, MN: IPUMS. 2021. 
+        http://doi.org/10.18128/D050.V16.0
+        
+Manson, Steven, Jonathan Schroeder, David Van Riper, Tracy Kugler, and Steven Ruggles. 
+        IPUMS National Historical Geographic Information System: Version 16.0 
+        [dataset]. Minneapolis, MN: IPUMS. 2021. 
+        http://doi.org/10.18128/D050.V16.0
+        
+Pebesma, E., 2018. Simple Features for R: Standardized Support for Spatial
+  Vector Data. The R Journal 10 (1), 439-446,
+  https://doi.org/10.32614/RJ-2018-009 
+
+United States Census Bureau. 2010. 
+
+Walker, Kyle, and Matt Herman (2021). tidycensus: Load US Census Boundary and Attribute Data as ‘tidyverse’ and ‘sf’-Ready Data Frames. R package version 1.1. https://CRAN.R-project.org/package=tidycensus 
